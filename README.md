@@ -229,3 +229,47 @@ A WebGPU API check alone is not sufficient: a device can expose WebGPU but still
 - WebGPU is strongly recommended; WASM fallback is available but can be much slower
 
 The first AI compatibility test may download the model. On a slow connection or low-end device this can take several minutes. After browser caching, subsequent tests can be substantially faster.
+
+## v2.1 model-loading fix
+
+If the previous build displayed `Failed to fetch` while loading the local LLM, this build changes the Transformers.js v3 ONNX Runtime WASM configuration to prefer its embedded/same-origin runtime instead of dynamically fetching the WASM factory from a CDN. WebGPU remains the first-choice runtime and WASM remains the fallback.
+
+The compatibility checker also performs a real model inference and reports the actual runtime selected.
+
+If model loading still reports `Failed to fetch`, the remaining likely cause is network/content filtering. The Llama model is downloaded from Hugging Face on first use; Hugging Face notes that model files can be served through separate storage/CDN hostnames, so a network may need to permit those HTTPS endpoints as well as `huggingface.co`. See the official Hugging Face model and download documentation.
+
+## IMPORTANT — Hugging Face CORS fix for Cloudflare deployment
+
+The deployed version includes `_worker.js`, which provides a **same-origin, restricted model proxy** at `/hf-model/*` for the exact Llama model used by the app. This is required because browser requests to some Hugging Face/Xet model-file URLs can fail CORS validation even when WebGPU itself works.
+
+The proxy:
+- allows only GET/HEAD/OPTIONS;
+- proxies only `onnx-community/Llama-3.2-1B-Instruct-q4f16`;
+- preserves HTTP Range requests needed for large model files;
+- follows Hugging Face redirects server-side;
+- adds browser CORS headers on the same-origin response;
+- does not receive the user's PDF, OCR text, generated questions, or Quality Gate data.
+
+### Cloudflare Workers with Static Assets
+
+This ZIP includes `wrangler.jsonc` and `_worker.js`. If the site is deployed as a Cloudflare Worker with Static Assets, deploy the project root with Wrangler:
+
+```bash
+npx wrangler deploy
+```
+
+The resulting site can remain on a free `workers.dev` hostname. Cloudflare's current Free Workers plan has 100,000 requests/day; response bodies have no enforced Workers limit, while each Worker invocation has a 50-external-subrequest limit. The model proxy normally uses one external fetch per model-file request (plus any upstream redirect chain). 
+
+### Cloudflare Pages
+
+For Pages, use Advanced Mode with `_worker.js` in the output directory, or migrate the proxy logic into a Pages Function. Cloudflare documents `_worker.js` as the Pages Advanced Mode mechanism for applications that need custom request handling while still serving static assets.
+
+### After deployment
+
+Open the site and run **Check My Device** again. In DevTools → Network, model requests should now look like:
+
+```text
+https://YOUR-SITE/hf-model/onnx-community/Llama-3.2-1B-Instruct-q4f16/...
+```
+
+They should **not** directly request `https://huggingface.co/.../resolve/...` from the browser.

@@ -6,6 +6,21 @@ const TRANSFORMERS_VERSION = "3.8.1";
 env.useBrowserCache = true;
 env.useWasmCache = true;
 env.allowRemoteModels = true;
+// Deployed builds use a same-origin Cloudflare Worker proxy for Hugging Face
+// model files. This avoids browser CORS failures on Hugging Face/Xet redirects.
+// Localhost keeps the direct Hugging Face host for simple local development.
+try {
+  const host = self.location?.hostname || "";
+  if (host !== "localhost" && host !== "127.0.0.1") {
+    env.remoteHost = `${self.location.origin}/hf-model`;
+    env.remotePathTemplate = "{model}/resolve/{revision}/{file}";
+  }
+} catch (_) {}
+// Prefer the Transformers.js embedded/same-origin WASM runtime instead of
+// dynamically fetching the ORT WASM factory from a CDN.
+try {
+  if (env.backends?.onnx?.wasm) env.backends.onnx.wasm.wasmPaths = undefined;
+} catch (_) {}
 
 let generator = null;
 let runtimeDevice = "unknown";
@@ -861,8 +876,22 @@ async function initializeModel() {
     runtimeDevice = "WASM";
     sendProgress(50, "AI model ready", "Llama 3.2 1B is running with WASM.");
   } catch (error) {
-    throw new Error(`Unable to initialize the browser LLM with WebGPU or WASM: ${error?.message || error}`);
+    throw new Error(formatModelLoadError(error));
   }
+}
+
+function formatModelLoadError(error) {
+  const raw = error?.stack || error?.message || String(error);
+  const normalized = raw.toLowerCase();
+  const hints = [];
+  if (normalized.includes("failed to fetch") || normalized.includes("network")) {
+    hints.push("A browser/network asset could not be fetched. Check that Hugging Face and jsDelivr are reachable and disable restrictive content blockers for this site.");
+    hints.push("If the WebGPU check passes but AI loading fails, inspect the browser Console/Network tab for the blocked URL.");
+  }
+  if (normalized.includes("out of memory") || normalized.includes("memory")) {
+    hints.push("The device may not have enough available RAM/GPU memory for the local model.");
+  }
+  return `Local LLM initialization failed. ${hints.join(" ")} Original error: ${raw}`;
 }
 
 function handleModelProgress(progress) {
