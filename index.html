@@ -103,7 +103,7 @@
       </div>
       <div id="compatSummary" class="compat-summary">Not tested yet.</div>
       <div id="compatResults" class="compat-results" style="display:none"></div>
-      <div class="compat-note">The check first tests browser capabilities and WebGPU. The optional AI runtime test performs a real short inference with the same local Llama model used by this application; the first run may download the model and take several minutes on slower devices.</div>
+      <div class="compat-note">The check tests browser capabilities, WebGPU, and a real local LLM inference. Model downloads try Hugging Face first and a CORS-compatible mirror fallback if required. The optional AI runtime test performs a real short inference with the same local Llama model used by this application; the first run may download the model and take several minutes on slower devices.</div>
     </div>
 
     <div class="pipeline-note">

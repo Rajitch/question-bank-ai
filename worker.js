@@ -2,6 +2,14 @@ import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transfo
 
 const MODEL_ID = "onnx-community/Llama-3.2-1B-Instruct-q4f16";
 const TRANSFORMERS_VERSION = "3.8.1";
+// Browser model hosts. Hugging Face is authoritative; the mirror is a fallback
+// for environments where the Hugging Face Xet storage endpoint does not expose
+// the CORS headers needed by browser fetch(). No server-side inference is used.
+const MODEL_HOSTS = [
+  { name: "Hugging Face", url: "https://huggingface.co" },
+  { name: "HF Mirror", url: "https://hf-mirror.com" }
+];
+let activeModelHost = null;
 
 env.useBrowserCache = true;
 env.useWasmCache = true;
@@ -820,7 +828,7 @@ async function runCompatibilityTest(requestId) {
       requestId,
       ok,
       device: runtimeDevice,
-      detail: ok ? `Real model inference succeeded (${runtimeDevice}). Output received from the local model.` : "The model initialized but returned no generated text."
+      detail: ok ? `Real model inference succeeded (${runtimeDevice}) via ${activeModelHost?.name || "model host"}. Output received from the local model.` : "The model initialized but returned no generated text."
     });
     sendProgress(60, "Compatibility test complete", ok ? `Local AI inference passed on ${runtimeDevice}.` : "Local AI inference returned no output.");
   } catch (error) {
@@ -833,36 +841,56 @@ async function initializeModel() {
 
   sendProgress(27, "Loading AI model", "Checking WebGPU availability…");
   const hasWebGPU = typeof navigator !== "undefined" && !!navigator.gpu;
+  const failures = [];
 
-  if (hasWebGPU) {
+  // Try each model host independently. This is necessary because browser fetch()
+  // follows Hugging Face's Xet redirects, and the final storage host may fail CORS
+  // even though huggingface.co itself is reachable.
+  for (const host of MODEL_HOSTS) {
+    activeModelHost = host;
+    env.remoteHost = host.url;
+    env.allowRemoteModels = true;
+
+    if (hasWebGPU) {
+      try {
+        sendProgress(30, "Loading AI model", `Trying ${host.name} with WebGPU…`);
+        generator = await pipeline("text-generation", MODEL_ID, {
+          device: "webgpu",
+          dtype: "q4f16",
+          progress_callback: handleModelProgress
+        });
+        runtimeDevice = "WebGPU";
+        sendProgress(50, "AI model ready", `Llama 3.2 1B is running with WebGPU via ${host.name}.`);
+        return;
+      } catch (error) {
+        failures.push(`${host.name}/WebGPU: ${error?.message || error}`);
+        console.warn(`${host.name} WebGPU model load failed.`, error);
+        generator = null;
+      }
+    }
+
     try {
-      sendProgress(30, "Loading AI model", "Attempting WebGPU acceleration…");
+      sendProgress(42, "Loading AI model", `Trying ${host.name} with WASM fallback…`);
       generator = await pipeline("text-generation", MODEL_ID, {
-        device: "webgpu",
-        dtype: "q4f16",
+        device: "wasm",
+        dtype: "q4",
         progress_callback: handleModelProgress
       });
-      runtimeDevice = "WebGPU";
-      sendProgress(50, "AI model ready", "Llama 3.2 1B is running with WebGPU.");
+      runtimeDevice = "WASM";
+      sendProgress(50, "AI model ready", `Llama 3.2 1B is running with WASM via ${host.name}.`);
       return;
     } catch (error) {
-      console.warn("WebGPU failed; falling back to WASM.", error);
+      failures.push(`${host.name}/WASM: ${error?.message || error}`);
+      console.warn(`${host.name} WASM model load failed.`, error);
       generator = null;
     }
   }
 
-  try {
-    sendProgress(42, "Loading AI model", "Falling back to WASM…");
-    generator = await pipeline("text-generation", MODEL_ID, {
-      device: "wasm",
-      dtype: "q4",
-      progress_callback: handleModelProgress
-    });
-    runtimeDevice = "WASM";
-    sendProgress(50, "AI model ready", "Llama 3.2 1B is running with WASM.");
-  } catch (error) {
-    throw new Error(`Unable to initialize the browser LLM with WebGPU or WASM: ${error?.message || error}`);
-  }
+  const likelyCors = failures.some(x => /cors|access-control-allow-origin|failed to fetch/i.test(x));
+  const suffix = likelyCors
+    ? " The model files were reachable through at least one attempted host, but the browser blocked a cross-origin model-file request. The app tried its built-in mirror fallback as well."
+    : "";
+  throw new Error(`Unable to initialize the browser LLM. Tried Hugging Face and the built-in mirror with WebGPU/WASM.${suffix} Last errors: ${failures.slice(-2).join(" | ")}`);
 }
 
 function handleModelProgress(progress) {

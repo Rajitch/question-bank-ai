@@ -229,3 +229,20 @@ A WebGPU API check alone is not sufficient: a device can expose WebGPU but still
 - WebGPU is strongly recommended; WASM fallback is available but can be much slower
 
 The first AI compatibility test may download the model. On a slow connection or low-end device this can take several minutes. After browser caching, subsequent tests can be substantially faster.
+
+
+## v3 model-loading fix (Cloudflare Pages Direct Upload)
+
+This version intentionally contains **no `_worker.js` and no `wrangler.jsonc`**. It is compatible with Cloudflare Pages Direct Upload.
+
+The browser LLM now tries two model hosts in order:
+1. Hugging Face Hub (authoritative source)
+2. `hf-mirror.com` as a browser-CORS fallback when the Hugging Face Xet storage redirect is blocked by the browser
+
+Inference remains entirely local in the browser. The mirror is only used to download/cache model files; it does not perform inference.
+
+### Important long-term note
+The mirror is a third-party service and is not controlled by this project. If it is unavailable in a particular network, the application reports the model-host failure instead of silently using a cloud inference API.
+
+### Cloudflare Pages Direct Upload
+Upload **only the contents of this project folder**. Do not upload Wrangler configuration files; this build has none.
